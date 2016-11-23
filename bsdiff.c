@@ -442,4 +442,78 @@ int main(int argc,char *argv[])
 	return 0;
 }
 
+#elif defined(NotBZ2_EXECUTABLE)
+#include <sys/types.h>
+#include <err.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+static int file_write(struct bsdiff_stream* stream, const void* buffer, int size)
+{
+    FILE* fp = (FILE*)stream->opaque;
+    if (!fwrite(buffer, sizeof(char), size, fp))
+        return -1;
+
+    return 0;
+}
+
+int main(int argc,char *argv[])
+{
+    int fd;
+    uint8_t *old,*new;
+    off_t oldsize,newsize;
+    uint8_t buf[8];
+    FILE * pf;
+    struct bsdiff_stream stream;
+
+    stream.malloc = malloc;
+    stream.free = free;
+    stream.write = file_write;
+
+    if(argc!=4) errx(1,"usage: %s oldfile newfile patchfile\n",argv[0]);
+
+    /* Allocate oldsize+1 bytes instead of oldsize bytes to ensure
+        that we never try to malloc(0) and get a NULL pointer */
+    if(((fd=open(argv[1],O_RDONLY,0))<0) ||
+        ((oldsize=lseek(fd,0,SEEK_END))==-1) ||
+        ((old=malloc(oldsize+1))==NULL) ||
+        (lseek(fd,0,SEEK_SET)!=0) ||
+        (read(fd,old,oldsize)!=oldsize) ||
+        (close(fd)==-1)) err(1,"%s",argv[1]);
+
+
+    /* Allocate newsize+1 bytes instead of newsize bytes to ensure
+        that we never try to malloc(0) and get a NULL pointer */
+    if(((fd=open(argv[2],O_RDONLY,0))<0) ||
+        ((newsize=lseek(fd,0,SEEK_END))==-1) ||
+        ((new=malloc(newsize+1))==NULL) ||
+        (lseek(fd,0,SEEK_SET)!=0) ||
+        (read(fd,new,newsize)!=newsize) ||
+        (close(fd)==-1)) err(1,"%s",argv[2]);
+
+    /* Create the patch file */
+    if ((pf = fopen(argv[3], "w")) == NULL)
+        err(1, "%s", argv[3]);
+
+    /* Write header (signature+newsize)*/
+    offtout(newsize, buf);
+    if (fwrite("ENDSLEY/BSDIFF43", 16, 1, pf) != 1 ||
+        fwrite(buf, sizeof(buf), 1, pf) != 1)
+        err(1, "Failed to write header");
+
+    stream.opaque = pf;
+    if (bsdiff(old, oldsize, new, newsize, &stream))
+        err(1, "bsdiff");
+
+    if (fclose(pf))
+        err(1, "fclose");
+
+    /* Free the memory we used */
+    free(old);
+    free(new);
+
+    return 0;
+}
 #endif

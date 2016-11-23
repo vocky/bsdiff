@@ -188,4 +188,84 @@ int main(int argc,char * argv[])
 	return 0;
 }
 
+#elif defined(NotBZ2_EXECUTABLE)
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <err.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+static int file_read(const struct bspatch_stream* stream, void* buffer, int length)
+{
+    FILE* fp = (FILE*)stream->opaque;
+    if (fread(buffer, sizeof(char), length, fp) != length)
+        return -1;
+
+    return 0;
+}
+
+int main(int argc,char * argv[])
+{
+    FILE * f;
+    int fd;
+    uint8_t header[24];
+    uint8_t *old, *new;
+    int64_t oldsize, newsize;
+    struct bspatch_stream stream;
+    struct stat sb;
+
+    if(argc!=4) errx(1,"usage: %s oldfile newfile patchfile\n",argv[0]);
+
+    /* Open patch file */
+    if ((f = fopen(argv[3], "r")) == NULL)
+        err(1, "fopen(%s)", argv[3]);
+
+    /* Read header */
+    if (fread(header, 1, 24, f) != 24) {
+        if (feof(f))
+            errx(1, "Corrupt patch\n");
+        err(1, "fread(%s)", argv[3]);
+    }
+
+    /* Check for appropriate magic */
+    if (memcmp(header, "ENDSLEY/BSDIFF43", 16) != 0)
+        errx(1, "Corrupt patch\n");
+
+    /* Read lengths from header */
+    newsize=offtin(header+16);
+    if(newsize<0)
+        errx(1,"Corrupt patch\n");
+
+    /* Close patch file and re-open it via libbzip2 at the right places */
+    if(((fd=open(argv[1],O_RDONLY,0))<0) ||
+        ((oldsize=lseek(fd,0,SEEK_END))==-1) ||
+        ((old=malloc(oldsize+1))==NULL) ||
+        (lseek(fd,0,SEEK_SET)!=0) ||
+        (read(fd,old,oldsize)!=oldsize) ||
+        (fstat(fd, &sb)) ||
+        (close(fd)==-1)) err(1,"%s",argv[1]);
+    if((new=malloc(newsize+1))==NULL) err(1,NULL);
+
+    stream.read = file_read;
+    stream.opaque = f;
+    if (bspatch(old, oldsize, new, newsize, &stream))
+        errx(1, "bspatch");
+
+    fclose(f);
+
+    /* Write the new file */
+    if(((fd=open(argv[2],O_CREAT|O_TRUNC|O_WRONLY,sb.st_mode))<0) ||
+        (write(fd,new,newsize)!=newsize) || (close(fd)==-1))
+        err(1,"%s",argv[2]);
+
+    free(new);
+    free(old);
+
+    return 0;
+}
+
 #endif
